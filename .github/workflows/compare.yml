@@ -29,7 +29,7 @@ jobs:
               await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'build.yml',
+              workflow_id: '.github/workflows/build.yml',
               ref: 'main'
               })
               
