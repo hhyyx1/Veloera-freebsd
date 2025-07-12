@@ -5,6 +5,10 @@ on:
     - cron: '0 16 */1 * *'
   workflow_dispatch:
 
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   tests:
     runs-on: ubuntu-latest
@@ -13,7 +17,7 @@ jobs:
       - name: compare versions
         run: |
           export REMOTEVERSION=$(wget -qO- https://api.github.com/repos/Veloera/Veloera/tags | gawk -F '["v]' '/name/{print "v"$5;exit}')
-          export LOCALVERSION=$(curl --location --silent --fail --show-error "https://api.github.com/repos/k0baya/new-api-freebsd/releases/latest" | grep -oP '"tag_name":\s*"\K[^"]+')
+          export LOCALVERSION=$(curl --location --silent --fail --show-error "https://api.github.com/repos/${{ github.repository }}/releases/latest" | grep -oP '"tag_name":\s*"\K[^"]+')
           bash compare.sh
           
       - name: Trigger release
@@ -23,8 +27,8 @@ jobs:
           github-token: ${{ github.token }}
           script: |
               await github.rest.actions.createWorkflowDispatch({
-              owner: 'k0baya',
-              repo: 'new-api-freebsd',
+              owner: context.repo.owner,
+              repo: context.repo.repo,
               workflow_id: 'build.yml',
               ref: 'main'
               })
