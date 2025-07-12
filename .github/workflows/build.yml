@@ -1,38 +1,80 @@
 name: Build-Veloera
-
-on: workflow_dispatch
+on: 
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (leave empty for latest)'
+        required: false
+        default: ''
+  schedule:
+    - cron: '0 2 * * 0'  # 每周日凌晨2点自动构建
+  push:
+    branches: [ main ]  # 当推送到主分支时触发
 
 permissions:
-  contents: read
+  contents: write
   actions: write
+  packages: write
 
 jobs:
-  test:
+  get-version:
     runs-on: ubuntu-latest
-    name: Build Veloera
+    outputs:
+      tag: ${{ steps.get_tag.outputs.tag }}
     steps:
-    
-      - uses: actions/checkout@v3
-    
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            # 添加错误处理
+            tag=$(curl -s "https://api.github.com/repos/Veloera/Veloera/tags" | jq -r '.[0].name // "v1.0.0"')
+            echo "tag=$tag" >> $GITHUB_OUTPUT
+          fi
+          echo "Selected tag: $tag"
+
+  build-frontend:
+    runs-on: ubuntu-latest
+    needs: get-version
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - name: Clone Repo
+      - name: Clone Veloera repo
         run: |
-            export LATEST_APP=$(wget -qO- https://api.github.com/repos/Veloera/Veloera/tags | gawk -F '["v]' '/name/{print "v"$5;exit}')
-            git clone -b $LATEST_APP https://github.com/Veloera/Veloera
+          git clone -b ${{ needs.get-version.outputs.tag }} https://github.com/Veloera/Veloera.git veloera-src
+          
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
 
       - name: Build Frontend
         env:
-          CI: ""
+          CI: false
+          DISABLE_ESLINT_PLUGIN: true
         run: |
-          cd Veloera/web
+          cd veloera-src/web
+          
+          # 检查是否存在 package.json
+          if [ ! -f package.json ]; then
+            echo "package.json not found!"
+            exit 1
+          fi
+          
+          # 安装依赖
           bun install
-          # 尝试安装sse模块
-          bun add sse
-          # 创建vite.config.js，配置JSX支持和外部依赖
+          
+          # 创建或更新 vite.config.js
           cat > vite.config.js << 'EOF'
           import { defineConfig } from "vite";
           import react from "@vitejs/plugin-react";
@@ -51,6 +93,7 @@ jobs:
               }
             },
             build: {
+              outDir: "dist",
               rollupOptions: {
                 external: ["sse"]
               }
@@ -58,50 +101,104 @@ jobs:
             plugins: [react()]
           });
           EOF
-          # 尝试构建
-          DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(git describe --tags) bun run build
-          cd ../..
-
-      - name: Build Backend
-        uses: vmactions/freebsd-vm@v1
+          
+          # 构建前端
+          VITE_REACT_APP_VERSION=${{ needs.get-version.outputs.tag }} bun run build
+          
+      - name: Upload frontend build
+        uses: actions/upload-artifact@v4
         with:
-          usesh: true
-          release: 13.2
-          prepare: |
-            pkg install -y jq wget curl git gcc bash gawk gsed
-            wget https://dl.google.com/go/go1.24.4.freebsd-amd64.tar.gz && tar -C /usr/local -xzf go1.24.4.freebsd-amd64.tar.gz && rm go1.24.4.freebsd-amd64.tar.gz
-            ln -s /usr/local/go/bin/go /usr/local/bin/go
-            # curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            # echo '. $HOME/.cargo/env' >> ~/.bashrc
-            # . "$HOME/.cargo/env"
-          run: |
-            git config --global --add safe.directory /home/runner/work/Veloera-freebsd/Veloera-freebsd/Veloera
-            cd Veloera
-            go mod download
-            go build -ldflags "-s -w -X 'one-api/common.Version=$(git describe --tags)' -extldflags '-static'" -o veloera
+          name: frontend-build
+          path: veloera-src/web/dist/
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@main
+  build-backend:
+    runs-on: ubuntu-latest
+    needs: get-version
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          name: veloera-freebsd
-          path: Veloera/veloera
-  
-      - name: Generate release tag
-        id: tag
-        run: echo "release_tag=$(wget -qO- https://api.github.com/repos/Veloera/Veloera/tags | gawk -F '["v]' '/name/{print "v"$5;exit}')" >> $GITHUB_OUTPUT
+          go-version: '1.21'
+
+      - name: Clone Veloera repo
+        run: |
+          git clone -b ${{ needs.get-version.outputs.tag }} https://github.com/Veloera/Veloera.git veloera-src
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Build Backend (Linux)
+        run: |
+          cd veloera-src
+          go mod download
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags "-s -w -X 'one-api/common.Version=${{ needs.get-version.outputs.tag }}'" \
+            -o veloera-linux-amd64
+
+      - name: Build Backend (FreeBSD) 
+        run: |
+          cd veloera-src
+          CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build \
+            -ldflags "-s -w -X 'one-api/common.Version=${{ needs.get-version.outputs.tag }}'" \
+            -o veloera-freebsd-amd64
+
+      - name: Upload backend builds
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-builds
+          path: |
+            veloera-src/veloera-linux-amd64
+            veloera-src/veloera-freebsd-amd64
+
+  create-release:
+    runs-on: ubuntu-latest
+    needs: [get-version, build-frontend, build-backend]
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
 
       - name: Create release
         uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ steps.tag.outputs.release_tag }}
-          files: Veloera/veloera
-              
-      - name: Delete workflow runs
+          tag_name: ${{ needs.get-version.outputs.tag }}-build
+          name: Veloera Build ${{ needs.get-version.outputs.tag }}
+          body: |
+            Automated build of Veloera ${{ needs.get-version.outputs.tag }}
+            
+            ## Files included:
+            - `veloera-linux-amd64`: Linux AMD64 binary
+            - `veloera-freebsd-amd64`: FreeBSD AMD64 binary  
+            - `frontend-build`: Frontend build artifacts
+            
+            Built on: ${{ github.run_number }}
+          files: |
+            artifacts/backend-builds/*
+            artifacts/frontend-build/**/*
+          draft: false
+          prerelease: false
+
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: [create-release]
+    if: always()
+    steps:
+      - name: Delete old workflow runs
         uses: Mattraks/delete-workflow-runs@v2
         with:
           token: ${{ github.token }}
           repository: ${{ github.repository }}
-          retain_days: 1
-          keep_minimum_runs: 8
+          retain_days: 7
+          keep_minimum_runs: 5
