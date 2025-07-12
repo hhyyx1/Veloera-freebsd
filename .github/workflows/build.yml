@@ -1,4 +1,4 @@
-name: Build
+name: Build-Veloera
 
 on: workflow_dispatch
 
@@ -65,7 +65,7 @@ export default defineConfig({
           # echo '. $HOME/.cargo/env' >> ~/.bashrc
           # . "$HOME/.cargo/env"
           run: |
-            git config --global --add safe.directory /home/runner/work/new-api-freebsd/new-api-freebsd/Veloera
+            git config --global --add safe.directory /home/runner/work/Veloera-freebsd/Veloera-freebsd/Veloera
             cd Veloera
             go mod download
             go build -ldflags "-s -w -X 'one-api/common.Version=$(git describe --tags)' -extldflags '-static'" -o veloera

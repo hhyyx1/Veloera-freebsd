@@ -20,7 +20,7 @@ jobs:
         if: ${{ env.SYNCED == 0 }}
         uses: actions/github-script@v6
         with:
-          github-token: ${{ secrets.PAT_TOKEN }}
+          github-token: ${{ github.token }}
           script: |
               await github.rest.actions.createWorkflowDispatch({
               owner: 'k0baya',
