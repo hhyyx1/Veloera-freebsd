@@ -59,7 +59,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lockb') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('veloera-src/web/bun.lockb') }}
           restore-keys: |
             ${{ runner.os }}-bun-
 
@@ -67,7 +67,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-go-${{ hashFiles('veloera-src/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-
 
