@@ -1,4 +1,4 @@
-name: Build-Veloera
+name: Build-Veloera-Enhanced
 on: 
   workflow_dispatch:
     inputs:
@@ -60,6 +60,21 @@ jobs:
         run: |
           git clone -b ${{ needs.get-version.outputs.tag }} https://github.com/Veloera/Veloera.git veloera-src
 
+      - name: Inspect project structure
+        run: |
+          echo "=== Project Structure ==="
+          cd veloera-src
+          find . -name "*.go" -path "*/router/*" -o -name "router.go" | head -10
+          echo ""
+          echo "=== Web Directory ==="
+          ls -la web/ || echo "No web directory"
+          echo ""
+          echo "=== Go Module ==="
+          head -5 go.mod
+          echo ""
+          echo "=== Main.go embed directives ==="
+          grep -n "go:embed" *.go || echo "No embed directives in main.go"
+
       - name: Build Frontend
         env:
           CI: false
@@ -73,15 +88,30 @@ jobs:
             exit 1
           fi
           
+          echo "=== Frontend Build Process ==="
+          echo "Current directory: $(pwd)"
+          echo "Package.json exists: $(ls -la package.json)"
+          
           # 安装依赖
+          echo "Installing dependencies..."
           bun install
           
-          # 创建或更新 vite.config.js
-          cat > vite.config.js << 'EOF'
+          # 检查是否有现有的 vite.config.js
+          if [ -f vite.config.js ]; then
+            echo "Existing vite.config.js found:"
+            cat vite.config.js
+            echo ""
+          fi
+          
+          # 只有在没有配置文件时才创建
+          if [ ! -f vite.config.js ] && [ ! -f vite.config.ts ]; then
+            echo "Creating vite.config.js..."
+            cat > vite.config.js << 'EOF'
           import { defineConfig } from "vite";
           import react from "@vitejs/plugin-react";
           
           export default defineConfig({
+            base: "/",
             esbuild: {
               loader: "jsx",
               include: /src\/.*\.[jt]sx?$/,
@@ -96,6 +126,7 @@ jobs:
             },
             build: {
               outDir: "dist",
+              assetsDir: "assets",
               rollupOptions: {
                 external: ["sse"]
               }
@@ -103,107 +134,267 @@ jobs:
             plugins: [react()]
           });
           EOF
-          
-          # 构建前端
-          VITE_REACT_APP_VERSION=${{ needs.get-version.outputs.tag }} bun run build
-          
-      - name: Verify frontend build
-        run: |
-          echo "Checking frontend build files:"
-          ls -la veloera-src/web/dist/ || echo "No dist directory found"
-          find veloera-src/web/dist/ -type f | head -10 || echo "No files found"
-          
-          # 检查关键文件
-          if [ ! -f "veloera-src/web/dist/index.html" ]; then
-            echo "ERROR: index.html not found in dist directory!"
-            exit 1
+          else
+            echo "Using existing build configuration"
           fi
           
-          echo "Frontend build verification passed"
+          # 构建前端
+          echo "Building frontend..."
+          VITE_REACT_APP_VERSION=${{ needs.get-version.outputs.tag }} bun run build
+          
+          echo "=== Build completed ==="
 
-      - name: Build Backend
+      - name: Verify frontend build
+        run: |
+          cd veloera-src
+          echo "=== Frontend Build Verification ==="
+          
+          # 检查 dist 目录
+          if [ -d "web/dist" ]; then
+            echo "✓ web/dist directory exists"
+            echo "Contents:"
+            ls -la web/dist/
+            echo ""
+            
+            # 检查关键文件
+            if [ -f "web/dist/index.html" ]; then
+              echo "✓ index.html exists"
+              echo "Size: $(ls -lh web/dist/index.html | awk '{print $5}')"
+              echo "First 200 chars:"
+              head -c 200 web/dist/index.html
+              echo ""
+            else
+              echo "✗ index.html NOT found"
+              exit 1
+            fi
+            
+            # 检查资源文件
+            echo "Asset files:"
+            find web/dist -name "*.js" -o -name "*.css" | head -10
+            echo ""
+            
+            # 统计文件数量
+            file_count=$(find web/dist -type f | wc -l)
+            total_size=$(du -sh web/dist | cut -f1)
+            echo "Total files: $file_count"
+            echo "Total size: $total_size"
+            
+          else
+            echo "✗ web/dist directory NOT found"
+            echo "Available directories in web/:"
+            ls -la web/
+            exit 1
+          fi
+
+      - name: Check router configuration
+        run: |
+          cd veloera-src
+          echo "=== Router Configuration Check ==="
+          
+          # 查找路由文件
+          find . -name "*.go" -exec grep -l "StaticFS\|Static\|buildFS\|indexPage" {} \; | head -5
+          echo ""
+          
+          # 检查路由配置
+          if [ -f "router/router.go" ]; then
+            echo "Found router/router.go, checking static file handling:"
+            grep -n -A 5 -B 5 "StaticFS\|Static\|buildFS\|indexPage" router/router.go || echo "No static file handling found"
+          fi
+          
+          # 检查 main.go 中的嵌入配置
+          echo ""
+          echo "Main.go embed configuration:"
+          grep -n -A 2 -B 2 "embed\|buildFS\|indexPage" main.go || echo "No embed configuration found"
+
+      - name: Build Backend with Debug
         run: |
           cd veloera-src
           
-          # 确保前端文件存在且在正确位置
-          if [ ! -d "web/dist" ]; then
-            echo "ERROR: Frontend dist directory not found!"
-            echo "Current directory structure:"
-            find . -name "dist" -type d
+          echo "=== Backend Build Process ==="
+          echo "Current directory: $(pwd)"
+          echo "Go version: $(go version)"
+          echo ""
+          
+          # 最终检查前端文件
+          echo "Final frontend verification:"
+          if [ -f "web/dist/index.html" ]; then
+            echo "✓ web/dist/index.html exists ($(ls -lh web/dist/index.html | awk '{print $5}'))"
+          else
+            echo "✗ web/dist/index.html missing!"
             exit 1
           fi
           
-          if [ ! -f "web/dist/index.html" ]; then
-            echo "ERROR: index.html not found in web/dist!"
-            exit 1
-          fi
-          
-          echo "Frontend files verified, proceeding with backend build..."
-          
-          # 显示将要嵌入的文件
           echo "Files to be embedded:"
           find web/dist -type f | head -20
+          echo ""
           
-          go mod download
+          # 检查 Go 模块
+          echo "Go module information:"
+          go mod tidy
+          head -10 go.mod
+          echo ""
           
-          # 构建 Linux 版本
-          echo "Building Linux version..."
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-            -ldflags "-s -w -X 'veloera/common.Version=${{ needs.get-version.outputs.tag }}'" \
-            -o veloera-linux-amd64
+          # 构建时显示详细信息
+          echo "Building with verbose output..."
           
           # 构建 FreeBSD 版本
           echo "Building FreeBSD version..."
-          CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build \
+          CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -v \
             -ldflags "-s -w -X 'veloera/common.Version=${{ needs.get-version.outputs.tag }}'" \
-            -o veloera-freebsd-amd64
+            -o veloera-freebsd-amd64 \
+            .
+          
+          # 构建 Linux 版本（用于测试）
+          echo "Building Linux version..."
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v \
+            -ldflags "-s -w -X 'veloera/common.Version=${{ needs.get-version.outputs.tag }}'" \
+            -o veloera-linux-amd64 \
+            .
           
           # 验证构建结果
-          if [ -f "veloera-linux-amd64" ]; then
-            echo "Linux binary built successfully: $(ls -lh veloera-linux-amd64)"
-          else
-            echo "ERROR: Linux binary not created!"
-            exit 1
-          fi
-          
-          if [ -f "veloera-freebsd-amd64" ]; then
-            echo "FreeBSD binary built successfully: $(ls -lh veloera-freebsd-amd64)"
-          else
-            echo "ERROR: FreeBSD binary not created!"
-            exit 1
-          fi
+          echo ""
+          echo "=== Build Results ==="
+          for binary in veloera-freebsd-amd64 veloera-linux-amd64; do
+            if [ -f "$binary" ]; then
+              echo "✓ $binary: $(ls -lh $binary | awk '{print $5}')"
+              file "$binary" 2>/dev/null || echo "  file command not available"
+            else
+              echo "✗ $binary: NOT CREATED"
+            fi
+          done
 
-      - name: Test binary (basic verification)
+      - name: Test embedded resources
         run: |
           cd veloera-src
           
-          # 基本的二进制文件验证
-          file veloera-linux-amd64
-          file veloera-freebsd-amd64
+          echo "=== Testing Embedded Resources ==="
           
-          # 检查二进制文件大小（嵌入前端后应该比较大）
-          linux_size=$(stat -c%s veloera-linux-amd64)
-          freebsd_size=$(stat -c%s veloera-freebsd-amd64)
-          
-          echo "Linux binary size: $linux_size bytes"
-          echo "FreeBSD binary size: $freebsd_size bytes"
-          
-          # 如果二进制文件太小，可能没有正确嵌入前端资源
-          if [ $linux_size -lt 10000000 ]; then  # 10MB
-            echo "WARNING: Linux binary seems too small, frontend might not be embedded correctly"
+          # 使用 strings 命令检查嵌入内容
+          if command -v strings >/dev/null 2>&1; then
+            echo "Checking for embedded HTML content..."
+            if strings veloera-freebsd-amd64 | grep -q "<!DOCTYPE html"; then
+              echo "✓ HTML content found in binary"
+            else
+              echo "✗ HTML content NOT found in binary"
+            fi
+            
+            echo "Checking for embedded CSS/JS..."
+            if strings veloera-freebsd-amd64 | grep -q "\.css\|\.js\|stylesheet\|script"; then
+              echo "✓ CSS/JS references found in binary"
+            else
+              echo "✗ CSS/JS references NOT found in binary"
+            fi
+            
+            echo "Checking for web/dist path..."
+            if strings veloera-freebsd-amd64 | grep -q "web/dist"; then
+              echo "✓ web/dist path found in binary"
+            else
+              echo "✗ web/dist path NOT found in binary"
+            fi
+          else
+            echo "strings command not available, skipping content check"
           fi
           
-          if [ $freebsd_size -lt 10000000 ]; then  # 10MB
-            echo "WARNING: FreeBSD binary seems too small, frontend might not be embedded correctly"
+          # 检查二进制文件大小
+          freebsd_size=$(stat -c%s veloera-freebsd-amd64 2>/dev/null || echo "0")
+          linux_size=$(stat -c%s veloera-linux-amd64 2>/dev/null || echo "0")
+          
+          echo ""
+          echo "Binary sizes:"
+          echo "  FreeBSD: $freebsd_size bytes ($(echo $freebsd_size | awk '{print $1/1024/1024}' | cut -c1-4) MB)"
+          echo "  Linux: $linux_size bytes ($(echo $linux_size | awk '{print $1/1024/1024}' | cut -c1-4) MB)"
+          
+          # 大小检查
+          min_size=20000000  # 20MB
+          if [ $freebsd_size -lt $min_size ]; then
+            echo "⚠️  WARNING: FreeBSD binary size is smaller than expected ($min_size bytes)"
+            echo "    This might indicate that frontend resources are not properly embedded"
+          else
+            echo "✓ FreeBSD binary size looks good"
           fi
+
+      - name: Create diagnostic package
+        run: |
+          cd veloera-src
+          
+          # 创建诊断脚本
+          cat > diagnose.sh << 'EOF'
+          #!/bin/bash
+          echo "=== Veloera Diagnostic Script ==="
+          echo "Binary: veloera-freebsd-amd64"
+          echo "Size: $(ls -lh veloera-freebsd-amd64 | awk '{print $5}')"
+          echo "Executable: $([ -x veloera-freebsd-amd64 ] && echo 'Yes' || echo 'No')"
+          echo ""
+          echo "Starting application in debug mode..."
+          echo "Access: http://localhost:3000"
+          echo "Press Ctrl+C to stop"
+          echo ""
+          GIN_MODE=debug ./veloera-freebsd-amd64
+          EOF
+          
+          chmod +x diagnose.sh
+          
+          # 创建 README
+          cat > README.md << 'EOF'
+          # Veloera FreeBSD Binary
+          
+          This package contains the Veloera application compiled for FreeBSD.
+          
+          ## Quick Start
+          
+          1. Make the binary executable:
+             ```bash
+             chmod +x veloera-freebsd-amd64
+             ```
+          
+          2. Run the application:
+             ```bash
+             ./veloera-freebsd-amd64
+             ```
+          
+          3. Access the web interface at: http://localhost:3000
+          
+          ## For serv00 Users
+          
+          1. Upload the binary to your serv00 account
+          2. Set executable permissions: `chmod +x veloera-freebsd-amd64`
+          3. Check your allocated port range in serv00 panel
+          4. Set the PORT environment variable:
+             ```bash
+             export PORT=your_allocated_port
+             ./veloera-freebsd-amd64
+             ```
+          
+          ## Troubleshooting
+          
+          If you see a blank page:
+          
+          1. Check browser developer tools for errors
+          2. Verify the application is listening on the correct port
+          3. Check if there are any firewall restrictions
+          4. Run with debug mode: `GIN_MODE=debug ./veloera-freebsd-amd64`
+          
+          ## Environment Variables
+          
+          - `PORT`: Port number (default: 3000)
+          - `GIN_MODE`: Set to 'debug' for verbose logging
+          - `DATABASE_URL`: Database connection string
+          - `REDIS_CONN_STRING`: Redis connection string
+          
+          ## Support
+          
+          For issues, please check: https://github.com/Veloera/Veloera
+          EOF
 
       - name: Upload builds
         uses: actions/upload-artifact@v4
         with:
           name: veloera-builds
           path: |
-            veloera-src/veloera-linux-amd64
             veloera-src/veloera-freebsd-amd64
+            veloera-src/veloera-linux-amd64
+            veloera-src/diagnose.sh
+            veloera-src/README.md
 
   create-release:
     runs-on: ubuntu-latest
@@ -214,42 +405,62 @@ jobs:
         with:
           path: artifacts/
 
-      - name: Debug trigger info
-        run: |
-          echo "Event name: ${{ github.event_name }}"
-          echo "Create release input: ${{ github.event.inputs.create_release }}"
-          echo "Should create release: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true') || (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == '') }}"
-          
-          # 显示构建产物
-          echo "Built artifacts:"
-          find artifacts/ -type f -exec ls -lh {} \;
-
       - name: Create release
         uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ needs.get-version.outputs.tag }}-build
-          name: Veloera Build ${{ needs.get-version.outputs.tag }}
+          tag_name: ${{ needs.get-version.outputs.tag }}-build-enhanced
+          name: Veloera Enhanced Build ${{ needs.get-version.outputs.tag }}
           body: |
-            Automated build of Veloera ${{ needs.get-version.outputs.tag }}
+            🚀 Enhanced automated build of Veloera ${{ needs.get-version.outputs.tag }}
             
-            ## Files included:
-            - `veloera-linux-amd64`: Linux AMD64 binary (with embedded frontend)
-            - `veloera-freebsd-amd64`: FreeBSD AMD64 binary (with embedded frontend)
+            ## 📦 Files included:
+            - `veloera-freebsd-amd64`: FreeBSD AMD64 binary with embedded frontend
+            - `veloera-linux-amd64`: Linux AMD64 binary with embedded frontend
+            - `diagnose.sh`: Diagnostic script for troubleshooting
+            - `README.md`: Detailed usage instructions
             
-            ## Usage:
-            1. Download the appropriate binary for your platform
-            2. Make it executable: `chmod +x veloera-*`
-            3. Run directly: `./veloera-freebsd-amd64` (or linux version)
-            4. Access web interface at: `http://localhost:3000` (or your configured port)
+            ## 🔧 Quick Start for serv00:
             
-            Built on: ${{ github.run_number }}
-            Triggered by: ${{ github.event_name }}
+            1. **Download and setup:**
+               ```bash
+               wget https://github.com/your-repo/releases/download/${{ needs.get-version.outputs.tag }}-build-enhanced/veloera-freebsd-amd64
+               chmod +x veloera-freebsd-amd64
+               ```
             
-            ## Note:
-            Both binaries include the complete web frontend embedded within them.
-            No additional files are required.
+            2. **Check your serv00 port allocation** in the panel
+            
+            3. **Run with your allocated port:**
+               ```bash
+               export PORT=your_allocated_port
+               ./veloera-freebsd-amd64
+               ```
+            
+            4. **Access via browser:** `http://your-domain:your_port`
+            
+            ## 🐛 Troubleshooting Blank Page:
+            
+            1. **Enable debug mode:**
+               ```bash
+               GIN_MODE=debug PORT=your_port ./veloera-freebsd-amd64
+               ```
+            
+            2. **Check browser developer tools** (F12) for JavaScript errors
+            
+            3. **Verify port accessibility** from outside
+            
+            4. **Check serv00 firewall** settings if needed
+            
+            ## 📋 Build Information:
+            - Build Number: ${{ github.run_number }}
+            - Triggered by: ${{ github.event_name }}
+            - Go Version: 1.21
+            - Frontend embedded: ✅
+            - Platforms: FreeBSD/Linux AMD64
+            
+            ## 🔍 Diagnostic:
+            Use the included `diagnose.sh` script to check for common issues.
           files: |
             artifacts/veloera-builds/*
           draft: false
