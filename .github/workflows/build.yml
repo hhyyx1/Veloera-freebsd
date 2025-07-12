@@ -67,9 +67,9 @@ jobs:
             pkg install -y jq wget curl git gcc bash gawk gsed
             wget https://dl.google.com/go/go1.24.4.freebsd-amd64.tar.gz && tar -C /usr/local -xzf go1.24.4.freebsd-amd64.tar.gz && rm go1.24.4.freebsd-amd64.tar.gz
             ln -s /usr/local/go/bin/go /usr/local/bin/go
-          # curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          # echo '. $HOME/.cargo/env' >> ~/.bashrc
-          # . "$HOME/.cargo/env"
+            # curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            # echo '. $HOME/.cargo/env' >> ~/.bashrc
+            # . "$HOME/.cargo/env"
           run: |
             git config --global --add safe.directory /home/runner/work/Veloera-freebsd/Veloera-freebsd/Veloera
             cd Veloera
