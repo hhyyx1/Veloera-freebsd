@@ -26,6 +26,29 @@ jobs:
         run: |
           cd Veloera/web
           bun install
+          # 尝试安装sse模块
+          bun add sse
+          # 创建或修改vite.config.js，将sse添加到外部依赖中
+          if [ -f "vite.config.js" ]; then
+            # 如果文件存在，备份原文件
+            cp vite.config.js vite.config.js.bak
+            # 修改vite.config.js，添加sse到外部依赖
+            sed -i 's/export default defineConfig({/export default defineConfig({\n  build: {\n    rollupOptions: {\n      external: ["sse"]\n    }\n  },/g' vite.config.js
+          else
+            # 如果文件不存在，创建新文件
+            echo 'import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  build: {
+    rollupOptions: {
+      external: ["sse"]
+    }
+  },
+  plugins: [react()]
+});' > vite.config.js
+          fi
+          # 尝试构建
           DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(git describe --tags) bun run build
           cd ../..
 
