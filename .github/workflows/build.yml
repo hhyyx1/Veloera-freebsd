@@ -112,21 +112,90 @@ jobs:
           echo "Checking frontend build files:"
           ls -la veloera-src/web/dist/ || echo "No dist directory found"
           find veloera-src/web/dist/ -type f | head -10 || echo "No files found"
+          
+          # 检查关键文件
+          if [ ! -f "veloera-src/web/dist/index.html" ]; then
+            echo "ERROR: index.html not found in dist directory!"
+            exit 1
+          fi
+          
+          echo "Frontend build verification passed"
 
       - name: Build Backend
         run: |
           cd veloera-src
+          
+          # 确保前端文件存在且在正确位置
+          if [ ! -d "web/dist" ]; then
+            echo "ERROR: Frontend dist directory not found!"
+            echo "Current directory structure:"
+            find . -name "dist" -type d
+            exit 1
+          fi
+          
+          if [ ! -f "web/dist/index.html" ]; then
+            echo "ERROR: index.html not found in web/dist!"
+            exit 1
+          fi
+          
+          echo "Frontend files verified, proceeding with backend build..."
+          
+          # 显示将要嵌入的文件
+          echo "Files to be embedded:"
+          find web/dist -type f | head -20
+          
           go mod download
           
           # 构建 Linux 版本
+          echo "Building Linux version..."
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-            -ldflags "-s -w -X 'one-api/common.Version=${{ needs.get-version.outputs.tag }}'" \
+            -ldflags "-s -w -X 'veloera/common.Version=${{ needs.get-version.outputs.tag }}'" \
             -o veloera-linux-amd64
           
           # 构建 FreeBSD 版本
+          echo "Building FreeBSD version..."
           CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build \
-            -ldflags "-s -w -X 'one-api/common.Version=${{ needs.get-version.outputs.tag }}'" \
+            -ldflags "-s -w -X 'veloera/common.Version=${{ needs.get-version.outputs.tag }}'" \
             -o veloera-freebsd-amd64
+          
+          # 验证构建结果
+          if [ -f "veloera-linux-amd64" ]; then
+            echo "Linux binary built successfully: $(ls -lh veloera-linux-amd64)"
+          else
+            echo "ERROR: Linux binary not created!"
+            exit 1
+          fi
+          
+          if [ -f "veloera-freebsd-amd64" ]; then
+            echo "FreeBSD binary built successfully: $(ls -lh veloera-freebsd-amd64)"
+          else
+            echo "ERROR: FreeBSD binary not created!"
+            exit 1
+          fi
+
+      - name: Test binary (basic verification)
+        run: |
+          cd veloera-src
+          
+          # 基本的二进制文件验证
+          file veloera-linux-amd64
+          file veloera-freebsd-amd64
+          
+          # 检查二进制文件大小（嵌入前端后应该比较大）
+          linux_size=$(stat -c%s veloera-linux-amd64)
+          freebsd_size=$(stat -c%s veloera-freebsd-amd64)
+          
+          echo "Linux binary size: $linux_size bytes"
+          echo "FreeBSD binary size: $freebsd_size bytes"
+          
+          # 如果二进制文件太小，可能没有正确嵌入前端资源
+          if [ $linux_size -lt 10000000 ]; then  # 10MB
+            echo "WARNING: Linux binary seems too small, frontend might not be embedded correctly"
+          fi
+          
+          if [ $freebsd_size -lt 10000000 ]; then  # 10MB
+            echo "WARNING: FreeBSD binary seems too small, frontend might not be embedded correctly"
+          fi
 
       - name: Upload builds
         uses: actions/upload-artifact@v4
@@ -135,7 +204,6 @@ jobs:
           path: |
             veloera-src/veloera-linux-amd64
             veloera-src/veloera-freebsd-amd64
-            veloera-src/web/dist/
 
   create-release:
     runs-on: ubuntu-latest
@@ -151,6 +219,10 @@ jobs:
           echo "Event name: ${{ github.event_name }}"
           echo "Create release input: ${{ github.event.inputs.create_release }}"
           echo "Should create release: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true') || (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == '') }}"
+          
+          # 显示构建产物
+          echo "Built artifacts:"
+          find artifacts/ -type f -exec ls -lh {} \;
 
       - name: Create release
         uses: softprops/action-gh-release@v1
@@ -163,12 +235,21 @@ jobs:
             Automated build of Veloera ${{ needs.get-version.outputs.tag }}
             
             ## Files included:
-            - `veloera-linux-amd64`: Linux AMD64 binary
-            - `veloera-freebsd-amd64`: FreeBSD AMD64 binary  
-            - Frontend build artifacts
+            - `veloera-linux-amd64`: Linux AMD64 binary (with embedded frontend)
+            - `veloera-freebsd-amd64`: FreeBSD AMD64 binary (with embedded frontend)
+            
+            ## Usage:
+            1. Download the appropriate binary for your platform
+            2. Make it executable: `chmod +x veloera-*`
+            3. Run directly: `./veloera-freebsd-amd64` (or linux version)
+            4. Access web interface at: `http://localhost:3000` (or your configured port)
             
             Built on: ${{ github.run_number }}
             Triggered by: ${{ github.event_name }}
+            
+            ## Note:
+            Both binaries include the complete web frontend embedded within them.
+            No additional files are required.
           files: |
             artifacts/veloera-builds/*
           draft: false
