@@ -28,18 +28,32 @@ jobs:
           bun install
           # 尝试安装sse模块
           bun add sse
-          # 创建vite.config.js，将sse添加到外部依赖中
-          echo 'import { defineConfig } from "vite";' > vite.config.js
-          echo 'import react from "@vitejs/plugin-react";' >> vite.config.js
-          echo '' >> vite.config.js
-          echo 'export default defineConfig({' >> vite.config.js
-          echo '  build: {' >> vite.config.js
-          echo '    rollupOptions: {' >> vite.config.js
-          echo '      external: ["sse"]' >> vite.config.js
-          echo '    }' >> vite.config.js
-          echo '  },' >> vite.config.js
-          echo '  plugins: [react()]' >> vite.config.js
-          echo '});' >> vite.config.js
+          # 创建vite.config.js，配置JSX支持和外部依赖
+          cat > vite.config.js << 'EOF'
+          import { defineConfig } from "vite";
+          import react from "@vitejs/plugin-react";
+          
+          export default defineConfig({
+            esbuild: {
+              loader: "jsx",
+              include: /src\/.*\.[jt]sx?$/,
+              exclude: []
+            },
+            optimizeDeps: {
+              esbuildOptions: {
+                loader: {
+                  ".js": "jsx"
+                }
+              }
+            },
+            build: {
+              rollupOptions: {
+                external: ["sse"]
+              }
+            },
+            plugins: [react()]
+          });
+          EOF
           # 尝试构建
           DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(git describe --tags) bun run build
           cd ../..
