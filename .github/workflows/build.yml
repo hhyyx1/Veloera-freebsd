@@ -34,7 +34,7 @@ jobs:
           fi
           echo "Selected tag: $tag"
 
-  build-frontend:
+  build-all:
     runs-on: ubuntu-latest
     needs: get-version
     steps:
@@ -46,17 +46,30 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
       - name: Clone Veloera repo
         run: |
           git clone -b ${{ needs.get-version.outputs.tag }} https://github.com/Veloera/Veloera.git veloera-src
           
-      - name: Cache dependencies
+      - name: Cache Bun dependencies
         uses: actions/cache@v3
         with:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lockb') }}
           restore-keys: |
             ${{ runner.os }}-bun-
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
 
       - name: Build Frontend
         env:
@@ -105,62 +118,39 @@ jobs:
           # 构建前端
           VITE_REACT_APP_VERSION=${{ needs.get-version.outputs.tag }} bun run build
           
-      - name: Upload frontend build
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-build
-          path: veloera-src/web/dist/
-
-  build-backend:
-    runs-on: ubuntu-latest
-    needs: get-version
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.21'
-
-      - name: Clone Veloera repo
+      - name: Verify frontend build
         run: |
-          git clone -b ${{ needs.get-version.outputs.tag }} https://github.com/Veloera/Veloera.git veloera-src
+          echo "Checking frontend build files:"
+          ls -la veloera-src/web/dist/ || echo "No dist directory found"
+          find veloera-src/web/dist/ -type f | head -10 || echo "No files found"
 
-      - name: Cache Go modules
-        uses: actions/cache@v3
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
-      - name: Build Backend (Linux)
+      - name: Build Backend
         run: |
           cd veloera-src
           go mod download
+          
+          # 构建 Linux 版本
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
             -ldflags "-s -w -X 'one-api/common.Version=${{ needs.get-version.outputs.tag }}'" \
             -o veloera-linux-amd64
-
-      - name: Build Backend (FreeBSD) 
-        run: |
-          cd veloera-src
+          
+          # 构建 FreeBSD 版本
           CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build \
             -ldflags "-s -w -X 'one-api/common.Version=${{ needs.get-version.outputs.tag }}'" \
             -o veloera-freebsd-amd64
 
-      - name: Upload backend builds
+      - name: Upload builds
         uses: actions/upload-artifact@v4
         with:
-          name: backend-builds
+          name: veloera-builds
           path: |
             veloera-src/veloera-linux-amd64
             veloera-src/veloera-freebsd-amd64
+            veloera-src/web/dist/
 
   create-release:
     runs-on: ubuntu-latest
-    needs: [get-version, build-frontend, build-backend]
+    needs: [get-version, build-all]
     if: github.event_name == 'workflow_dispatch'
     steps:
       - name: Download all artifacts
@@ -181,12 +171,11 @@ jobs:
             ## Files included:
             - `veloera-linux-amd64`: Linux AMD64 binary
             - `veloera-freebsd-amd64`: FreeBSD AMD64 binary  
-            - `frontend-build`: Frontend build artifacts
+            - Frontend build artifacts
             
             Built on: ${{ github.run_number }}
           files: |
-            artifacts/backend-builds/*
-            artifacts/frontend-build/**/*
+            artifacts/veloera-builds/*
           draft: false
           prerelease: false
 
